@@ -14,7 +14,11 @@
 (defun logger-stop ()
   (chanl:send *logger-channel* :stop :blockp nil))
 
-(defun info (message &rest args)
+(defmacro info(message &rest args)
+  (let ((module-name (package-name *package*)))
+    `(info-message (concatenate 'string "[" ,module-name "] " ,message) ,@args)))
+
+(defun info-message (message &rest args)
   (let ((msg (apply #'format (append (list nil message) args))))
     (chanl:send *logger-channel* msg :blockp nil))
   (values))
