@@ -5,7 +5,7 @@
 |#
 
 (in-package :cl-user)
-(defpackage numen
+(defpackage :numen
   (:use :cl :alexandria :split-sequence
    #+:lispworks :capi)
   ;;  (:export main #+lispworks main-ui)

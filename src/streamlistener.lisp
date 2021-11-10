@@ -1,11 +1,17 @@
-(in-package numen)
+#|
+  This file is a part of numen project.
 
-(defpackage #:numen.streamlistener
+  (C) COPYRIGHT Alexey Veretennikov<alexey.veretennikov@protonmail.com>, 2021
+|#
+(in-package :cl-user)
+
+
+(defpackage :numen.streamlistener
   (:documentation "A connection to the Frostbite Client streaming service")
-  (:use #:cl #:alexandria #:numen.logger)
+  (:use :cl :alexandria :numen.logger)
   (:export start stop))
 
-(in-package #:numen.streamlistener)
+(in-package :numen.streamlistener)
 
 (defparameter *stream-server* "localhost"
   "IP Address of the machine with FrostBite frontend running")
@@ -21,7 +27,7 @@
     (inf "Stopping the StreamListener")
     (setf *stopped* t)
     (sleep 1.5)
-    (inf "Stopped StreamingListener")))
+    (inf "Stopped StreamListener")))
 
 (defun start (&optional (on-received-callback nil))
   (inf "Start StreamingListener")
@@ -36,7 +42,7 @@
   (inf "Starting the connect loop")
   (loop while (not *stopped*)
         do
-        (inf "Trying to connect to the server on port ~a..." *stream-port*)
+        (dbg "Trying to connect to the server on port ~a..." *stream-port*)
         (ignore-errors (connect-and-read on-received-callback))
         (sleep 1))
   (setf *stopped* t)
@@ -53,13 +59,22 @@
                     (when (and line on-received-callback)
                       (funcall on-received-callback line))))
           (usocket:socket-close socket))
-      (error (e) (inf "Error: ~a" e))))
-  (inf "connect-and-read finished"))
+      (error (e) (dbg "Error: ~a" e))))
+  (dbg "connect-and-read finished"))
 
 (defun read-until-newline (&optional (stream *standard-input*))
   "Try to do nonblocking read of the stream until the newline and return a line"
+  ;; TODO: with this design if the connection drops while we are still
+  ;; reading from the stream, the message message received so far
+  ;; will not be processed.
+  ;; Consider using (read-char-no-hang stream nil :eof)
+  ;; and handle :eof return value (here and in the calling function)
   (loop for c = (read-char-no-hang stream)
         while (and c (char/= c #\Newline))
         collect c into ret
         finally (return
                  (when ret (coerce ret 'string)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Test
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
