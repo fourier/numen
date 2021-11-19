@@ -7,7 +7,7 @@
 
 (defpackage :numen.logger
   (:documentation "Logger package")
-  (:use :cl :alexandria)
+  (:use :cl :alexandria :numen.mailbox)
   (:export
    logger-init
    logger-initialized-p
@@ -20,7 +20,7 @@
 
 (in-package numen.logger)
 
-(defparameter *logger-channel* nil
+(defparameter *logger-mailbox* nil
   "Channel for logging")
 
 (defparameter *logger-level* 3
@@ -30,42 +30,10 @@
 2 info and errors,
 3 everything")
 
-(defun logger-init ()
-  ;; Stop running channel
-  (when *logger-channel*
-    (chanl:send *logger-channel* :stop))
-  ;; Wait until stopped
-  (when (= 1000
-         (loop for counter below 1000
-               while *logger-channel*
-               do (sleep 0.01)
-               finally (return counter)))
-    (format t "Error: unable to stop *logger-channel*, forcing it"))
-  ;; Create a new instance
-  (setf *logger-channel* (make-instance 'chanl:channel))
-  ;; Run the logger loop in a thread
-  (chanl:pexec (:name "Logger")
-   (loop while *logger-channel* 
-         for msg = (chanl:recv *logger-channel*)
-         until (eq msg :stop)
-         do 
-         (format t "~a~%" msg))
-   (setf *logger-channel* nil)))
-
-(defun logger-initialized-p ()
-  (not (eq *logger-channel* nil)))
-   
-(defun logger-stop ()
-  (chanl:send *logger-channel* :stop :blockp t))
-
-(defun logger-set-level (level)
-  (setf *logger-level* level))
-
-
 (defmacro msg(message lvl accept-lvl-num &rest args)
   (let ((module-name (package-name *package*)))
     `(if (> numen.logger::*logger-level* ,accept-lvl-num)
-         (info-message (concatenate 'string "[" ,module-name "] " ,lvl ": " ,message) ,@args)
+         (info-message ,(concatenate 'string "[" module-name "] " lvl ": " message) ,@args)
          (values))))
 
 (defmacro inf(message &rest args)
@@ -77,7 +45,40 @@
 (defmacro err(message &rest args)
   `(msg ,message "E" 0 ,@args))
 
+(defun logger-init ()
+  ;; Stop running thread
+  (when *logger-mailbox*
+    (mb-send *logger-mailbox* :stop))
+  ;; Wait until stopped
+  (when (= 1000
+         (loop for counter below 1000
+               while *logger-mailbox*
+               do (sleep 0.01)
+               finally (return counter)))
+    (format t "Error: unable to stop *logger-mailbox*, forcing it"))
+  ;; Create a new instance
+  (setf *logger-mailbox* (mb-create "Logger mailbox"))
+  ;; Run the logger loop in a thread
+  (bt:make-thread #'logger-main :name "Logger thread"))
+
+(defun logger-main ()
+   (loop while *logger-mailbox* 
+         for msg = (mb-read *logger-mailbox*)
+         until (eq msg :stop)
+         do 
+         (format t "~a~%" msg))
+   (setf *logger-mailbox* nil))
+
+(defun logger-initialized-p ()
+  (not (eq *logger-mailbox* nil)))
+   
+(defun logger-stop ()
+  (mb-send *logger-mailbox* :stop))
+
+(defun logger-set-level (level)
+  (setf *logger-level* level))
+
 (defun info-message (message &rest args)
   (let ((msg (apply #'format (append (list nil message) args))))
-    (chanl:send *logger-channel* msg :blockp nil))
+    (when (logger-initialized-p) (mb-send *logger-mailbox* msg)))
   (values))

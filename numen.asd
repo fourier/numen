@@ -18,14 +18,15 @@
                yacc
                ppath
                usocket
-               chanl
+               bordeaux-threads
                do-urlencode)
   :components ((:module "src"
                 :components
                 ((:file "package")
+                 (:file "mailbox")
                  (:file "logger")
                  (:file "streamlistener")
-;;                 (:file "apiclient")
+                 (:file "apiclient")
                  (:file "numen"))))
   :description "Numen is a script server for FrostBite DragonRealms Frontend")
 ;;  :in-order-to ((test-op (test-op numen-test))))

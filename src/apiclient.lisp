@@ -2,8 +2,8 @@
 
 (defpackage #:numen.apiclient
   (:documentation "A connection to the Frostbite Client API")
-  (:use #:cl #:alexandria #:numen.logger)
-  (:export start stop))
+  (:use #:cl #:alexandria #:numen.logger #:numen.mailbox)
+  (:export init stop send))
 
 (in-package #:numen.apiclient)
 
@@ -13,51 +13,110 @@
 (defparameter *api-port* 10003
   "Port number for the Frostbite API server")
 
-(defparameter *client-channel* nil
-  "Channel for communication with API client")
+(defparameter +event-delay+ 2.0
+  "Timeout for an event to be received")
 
-(defun start ()
-  (when *client-channel*
-      (chanl:send *client-channel* :stop)
-      (setf *client-channel* (make-instance 'chanl:channel)))
-  (inf "Start ApiClient")
-  (chanl:pexec (:name "ApiClient")
-    (inf "Start connection loop")
-    (loop while (connect-client)
-          do
-          (sleep 1))
-    (setf *client-channel* nil)
-    (inf "Stopped ApiClient")))
+(defparameter *input-mailbox* nil
+  "Mailbox for incoming messages to be sent to the API server")
+
+(defparameter *output-mailbox* nil
+  "Mailbox for responses from the server")
+
+(defparameter *thread* nil
+  "Thread executing client")
+
+(defparameter *socket* nil)
 
 (defun stop ()
-  (inf "Stopping ApiClient")
-  (chanl:send *client-channel* :stop :blockp t))
+  (when *thread*
+    (dbg "Client is running, trying to stop...")
+;;    (send :stop)
+    ;; Wait until stopped
+    (when (= 1000
+             (loop for counter below 1000
+                   while *thread*
+                   do (sleep 0.01)
+                   finally (return counter)))
+      (dbg "Error: unable to stop, forcing")
+      (bt:destroy-thread *thread*))))
+  
+(defun init ()
+  (inf "Start ApiClient")
+  ;; Stop running thread
+  (stop)
+  ;; Create a new instance
+  (setf *input-mailbox* (mb-create "API Client Input Mailbox"))
+  (setf *output-mailbox* (mb-create "API Client Output Mailbox"))  
+  ;; Run the event loop in a thread
+  (setf *thread*
+        (bt:make-thread #'event-loop :name "API Client Thread")))
 
-(defun message (msg)
-  (chanl:send *client-channel* msg))
+(defun notify-connected()
+  (inf "Connected"))
+
+(defun notify-disconnected()
+  (inf "Disconnected"))
+
+(defun event-loop ()
+  (unwind-protect 
+      (loop initially (send :start)
+            for evt = (mb-read *input-mailbox* +event-delay+)
+            until (eq evt :stop)
+            do
+            (process-event evt)
+            finally
+            (inf "Stopped event loop~%"))
+    ;; cleanup after thread termination
+    (progn
+      (when *socket*
+        (usocket:socket-close *socket*))
+      (setf *input-mailbox* nil
+            *output-mailbox* nil
+            *thread* nil
+            *socket* nil)
+      (inf "Stopped ApiClient thread"))))
+
+(defun process-event (evt)
+  (case evt
+    (:start (connect-client))
+    ((nil) (process-timer-event))
+    (:wait (sleep +event-delay+))
+    (otherwise (dbg "Received ~a~%" evt))))
+
+(defun send (msg)
+  (dbg "Sending a message ~a" msg)
+  (mb-send *input-mailbox* msg))
 
 (defun connect-client ()
   (dbg "Trying to connect to the API server on port ~a..." *api-port*)
   (handler-case
-      (usocket:with-client-socket (socket stream *api-server* *api-port* :timeout 3)
-        (dbg "Connected to API server on port ~a" *api-port*)
-        (loop for msg = (chanl:recv *client-channel* :blockp nil)
-              for c = (read-char-no-hang stream nil :end)
-              until (or (eq msg :stop) (eq c :end))
-              do
-              (dbg "Waiting for the message on a queue")
-              (sleep 1)
-              ;; TODO implement transmission here
-              finally (return (not (eq msg :stop)))))
+      (progn
+        (setf *socket* 
+              (usocket:socket-connect *api-server* *api-port* :timeout 3))
+        (inf "Connected to API server on port ~a" *api-port*))
     (error (e)
-      (dbg "Connection error: ~a" e)
-      ;; Return T on connection error for connection reattempt
-      t)))
+      (dbg "Unable to connect" e)
+      (send :wait)
+      (send :start))))
 
-      ;;;                 (let ((line (read-until-slash-zero stream)))
-;;;                   (when (and line on-received-callback)
-;;;                     (funcall on-received-callback line))))
-;;;         (error (e) (progn (dbg "Error: ~a" e))))
+(defun process-timer-event()
+  ;; Check connection status
+  (dbg "Checking the connection status...")
+  (let (should-reconnect 
+        (stream (usocket:socket-stream *socket*)))
+    (handler-case 
+        (let* ((c (read-char-no-hang stream nil :eof)))
+          (setf should-reconnect
+                (case c
+                  (:eof t)
+                  ((nil) nil)
+                  (otherwise 
+                   (unread-char c stream) nil))))
+      (error (e)
+        (setf should-reconnect t)))
+    (when should-reconnect
+      (inf "Connection dropped, reconnect")
+      (send :start))))
 
 (defun read-until-slash-zero (&optional (stream *standard-input*))
   "Try to do nonblocking read of the stream until the '\\0' and return a line"
@@ -69,5 +128,3 @@
         if (and (char= p #\\) (char= c #\0))
         return (values (subseq (coerce ret 'string) 0 i) t)
         finally return (values (coerce ret 'string) nil)))
-                
-                   
