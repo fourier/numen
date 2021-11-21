@@ -19,9 +19,6 @@
 (defparameter *input-mailbox* nil
   "Mailbox for incoming messages to be sent to the API server")
 
-(defparameter *output-mailbox* nil
-  "Mailbox for responses from the server")
-
 (defparameter *thread* nil
   "Thread executing client")
 
@@ -30,7 +27,7 @@
 (defun stop ()
   (when *thread*
     (dbg "Client is running, trying to stop...")
-;;    (send :stop)
+    (send :stop)
     ;; Wait until stopped
     (when (= 1000
              (loop for counter below 1000
@@ -44,12 +41,10 @@
   (inf "Start ApiClient")
   ;; Stop running thread
   (stop)
-  ;; Create a new instance
-  (setf *input-mailbox* (mb-create "API Client Input Mailbox"))
-  (setf *output-mailbox* (mb-create "API Client Output Mailbox"))  
-  ;; Run the event loop in a thread
-  (setf *thread*
-        (bt:make-thread #'event-loop :name "API Client Thread")))
+  ;; Create new mailboxes
+  (setf *input-mailbox* (mb-create "API Client Input Mailbox")
+        ;; Run the event loop in a thread
+        *thread* (bt:make-thread #'event-loop :name "API Client Thread")))
 
 (defun notify-connected()
   (inf "Connected"))
@@ -67,14 +62,12 @@
             finally
             (inf "Stopped event loop~%"))
     ;; cleanup after thread termination
-    (progn
-      (when *socket*
-        (usocket:socket-close *socket*))
-      (setf *input-mailbox* nil
-            *output-mailbox* nil
-            *thread* nil
-            *socket* nil)
-      (inf "Stopped ApiClient thread"))))
+    (when *socket*
+      (usocket:socket-close *socket*))
+    (setf *input-mailbox* nil
+          *thread* nil
+          *socket* nil)
+    (inf "Stopped ApiClient thread")))
 
 (defun process-event (evt)
   (case evt
@@ -127,4 +120,4 @@
         collect c into ret
         if (and (char= p #\\) (char= c #\0))
         return (values (subseq (coerce ret 'string) 0 i) t)
-        finally return (values (coerce ret 'string) nil)))
+        finally (return (values (coerce ret 'string) nil))))

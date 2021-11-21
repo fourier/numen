@@ -16,8 +16,8 @@
    mb-read))
 
 (in-package numen.mailbox)
-
-#+sbcl (require 'sb-concurrency)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+#+sbcl (require :sb-concurrency))
 
 (defun mb-create (name)
   #+sbcl (sb-concurrency:make-mailbox :name name)
