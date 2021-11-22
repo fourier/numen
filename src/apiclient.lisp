@@ -3,7 +3,8 @@
 (defpackage #:numen.apiclient
   (:documentation "A connection to the Frostbite Client API")
   (:use #:cl #:alexandria #:numen.logger #:numen.mailbox)
-  (:export init stop send))
+  (:import-from #:numen.worker start stop send)
+  (:export start stop send create-api-client))
 
 (in-package #:numen.apiclient)
 
@@ -16,100 +17,84 @@
 (defparameter +event-delay+ 2.0
   "Timeout for an event to be received")
 
-(defparameter *input-mailbox* nil
-  "Mailbox for incoming messages to be sent to the API server")
-
-(defparameter *thread* nil
-  "Thread executing client")
-
 (defparameter *socket* nil)
 
-(defun stop ()
-  (when *thread*
-    (dbg "Client is running, trying to stop...")
-    (send :stop)
-    ;; Wait until stopped
-    (when (= 1000
-             (loop for counter below 1000
-                   while *thread*
-                   do (sleep 0.01)
-                   finally (return counter)))
-      (dbg "Error: unable to stop, forcing")
-      (bt:destroy-thread *thread*))))
+(defclass api-client (numen.worker::worker)
+  ((port :initarg :port :initform *api-port*
+         :documentation "Frostbite API server port to connect to")
+   (host :initarg :host :initform *api-server*
+         :documentation "Frostbite API server hostname")
+   (socket :initform nil
+           :documentation "TCP client socket")))
+   
+
+(defun create-api-client ()
+  (make-instance 'api-client :event-delay +event-delay+
+                 :name "API Client"))
   
-(defun init ()
-  (inf "Start ApiClient")
-  ;; Stop running thread
-  (stop)
-  ;; Create new mailboxes
-  (setf *input-mailbox* (mb-create "API Client Input Mailbox")
-        ;; Run the event loop in a thread
-        *thread* (bt:make-thread #'event-loop :name "API Client Thread")))
+(defmethod numen.worker:start :before ((self api-client))
+  (inf "Start ApiClient"))
+
+(defmethod numen.worker:start :after ((self api-client))
+  (numen.worker:send self :start))
+
+(defmethod numen.worker:event-loop :after ((self api-client))
+  (inf "Stopped ApiClient thread"))
+
+(defmethod numen.worker:send :before ((self api-client) msg)
+  (dbg "Sending a message ~a" msg))
+
+(defmethod numen.worker:process-event ((self api-client) evt)
+  (case evt
+    (:start (connect-client self))
+    (:wait (sleep +event-delay+))
+    (otherwise (dbg "Received ~a~%" evt))))
+
+
+(defmethod connect-client ((self api-client))
+  (with-slots (socket host port) self
+    (dbg "Trying to connect to the API server on port ~a..." port)
+    (handler-case
+        (progn
+          (setf socket
+                (usocket:socket-connect host port :timeout 3))
+          (inf "Connected to API server on port ~a" port))
+      (error (e)
+        (dbg "Unable to connect" e)))))
+
+(defmethod numen.worker:process-timer-event ((self api-client))
+  (dbg "Checking the connection status...")
+  (with-slots (socket) self
+    (let ((should-reconnect (null socket)))
+      (unless should-reconnect
+        (let ((stream (usocket:socket-stream socket)))
+          (handler-case 
+              (let* ((c (read-char-no-hang stream nil :eof)))
+                (setf should-reconnect
+                      (case c
+                        (:eof t)
+                        ((nil) nil)
+                        (otherwise 
+                         (unread-char c stream) nil))))
+            (error (e)
+              (setf should-reconnect t)))))
+      (when should-reconnect
+        (inf "Connection dropped, reconnect")
+        (numen.worker:send self :wait)
+        (numen.worker:send self :start)))))
+
+(defmethod numen.worker:cleanup ((self api-client))
+  ;; Close and clean the socket slot
+  (with-slots (socket) self
+    (when socket
+      (usocket:socket-close socket)
+      (setf socket nil))))
 
 (defun notify-connected()
   (inf "Connected"))
 
 (defun notify-disconnected()
   (inf "Disconnected"))
-
-(defun event-loop ()
-  (unwind-protect 
-      (loop initially (send :start)
-            for evt = (mb-read *input-mailbox* +event-delay+)
-            until (eq evt :stop)
-            do
-            (process-event evt)
-            finally
-            (inf "Stopped event loop~%"))
-    ;; cleanup after thread termination
-    (when *socket*
-      (usocket:socket-close *socket*))
-    (setf *input-mailbox* nil
-          *thread* nil
-          *socket* nil)
-    (inf "Stopped ApiClient thread")))
-
-(defun process-event (evt)
-  (case evt
-    (:start (connect-client))
-    ((nil) (process-timer-event))
-    (:wait (sleep +event-delay+))
-    (otherwise (dbg "Received ~a~%" evt))))
-
-(defun send (msg)
-  (dbg "Sending a message ~a" msg)
-  (mb-send *input-mailbox* msg))
-
-(defun connect-client ()
-  (dbg "Trying to connect to the API server on port ~a..." *api-port*)
-  (handler-case
-      (progn
-        (setf *socket* 
-              (usocket:socket-connect *api-server* *api-port* :timeout 3))
-        (inf "Connected to API server on port ~a" *api-port*))
-    (error (e)
-      (dbg "Unable to connect" e)
-      (send :wait)
-      (send :start))))
-
-(defun process-timer-event()
-  ;; Check connection status
-  (dbg "Checking the connection status...")
-  (let (should-reconnect 
-        (stream (usocket:socket-stream *socket*)))
-    (handler-case 
-        (let* ((c (read-char-no-hang stream nil :eof)))
-          (setf should-reconnect
-                (case c
-                  (:eof t)
-                  ((nil) nil)
-                  (otherwise 
-                   (unread-char c stream) nil))))
-      (error (e)
-        (setf should-reconnect t)))
-    (when should-reconnect
-      (inf "Connection dropped, reconnect")
-      (send :start))))
 
 (defun read-until-slash-zero (&optional (stream *standard-input*))
   "Try to do nonblocking read of the stream until the '\\0' and return a line"

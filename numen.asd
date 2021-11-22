@@ -25,6 +25,7 @@
                 ((:file "package")
                  (:file "mailbox")
                  (:file "logger")
+                 (:file "worker")
                  (:file "streamlistener")
                  (:file "apiclient")
                  (:file "numen"))))
