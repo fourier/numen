@@ -68,7 +68,7 @@ If event-delay slot is nil, the timer event will never be called"))
   "Send a message to a worker thread"
   (with-slots (mailbox) worker
     (when mailbox
-      (inf "sendig msg ~a" message)
+      (dbg "Sending a message ~a" message)
       (mb-send mailbox message))))
 
 (defmethod event-loop ((worker worker))

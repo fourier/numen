@@ -41,15 +41,11 @@
 (defmethod numen.worker:event-loop :after ((self api-client))
   (inf "Stopped ApiClient thread"))
 
-(defmethod numen.worker:send :before ((self api-client) msg)
-  (dbg "Sending a message ~a" msg))
-
 (defmethod numen.worker:process-event ((self api-client) evt)
   (case evt
     (:start (connect-client self))
     (:wait (sleep +event-delay+))
     (otherwise (dbg "Received ~a~%" evt))))
-
 
 (defmethod connect-client ((self api-client))
   (with-slots (socket host port) self
