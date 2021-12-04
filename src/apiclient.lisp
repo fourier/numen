@@ -3,7 +3,7 @@
 (defpackage #:numen.apiclient
   (:documentation "A connection to the Frostbite Client API")
   (:use #:cl #:alexandria #:numen.logger #:numen.mailbox)
-  (:import-from #:numen.worker start stop send)
+  (:import-from #:numen.actor start stop send)
   (:export start stop send create-api-client))
 
 (in-package #:numen.apiclient)
@@ -19,7 +19,7 @@
 
 (defparameter *socket* nil)
 
-(defclass api-client (numen.worker::worker)
+(defclass api-client (numen.actor::actor)
   ((port :initarg :port :initform *api-port*
          :documentation "Frostbite API server port to connect to")
    (host :initarg :host :initform *api-server*
@@ -32,16 +32,16 @@
   (make-instance 'api-client :event-delay +event-delay+
                  :name "API Client"))
   
-(defmethod numen.worker:start :before ((self api-client))
+(defmethod numen.actor:start :before ((self api-client))
   (inf "Start ApiClient"))
 
-(defmethod numen.worker:start :after ((self api-client))
-  (numen.worker:send self :start))
+(defmethod numen.actor:start :after ((self api-client))
+  (numen.actor:send self :start))
 
-(defmethod numen.worker:event-loop :after ((self api-client))
+(defmethod numen.actor:event-loop :after ((self api-client))
   (inf "Stopped ApiClient thread"))
 
-(defmethod numen.worker:process-event ((self api-client) evt)
+(defmethod numen.actor:process-event ((self api-client) evt)
   (case evt
     (:start (connect-client self))
     (:wait (sleep +event-delay+))
@@ -58,7 +58,7 @@
       (error (e)
         (dbg "Unable to connect" e)))))
 
-(defmethod numen.worker:process-timer-event ((self api-client))
+(defmethod numen.actor:process-timer-event ((self api-client))
   (dbg "Checking the connection status...")
   (with-slots (socket) self
     (let ((should-reconnect (null socket)))
@@ -76,10 +76,10 @@
               (setf should-reconnect t)))))
       (when should-reconnect
         (inf "Connection dropped, reconnect")
-        (numen.worker:send self :wait)
-        (numen.worker:send self :start)))))
+        (numen.actor:send self :wait)
+        (numen.actor:send self :start)))))
 
-(defmethod numen.worker:cleanup ((self api-client))
+(defmethod numen.actor:cleanup ((self api-client))
   ;; Close and clean the socket slot
   (with-slots (socket) self
     (when socket
