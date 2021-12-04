@@ -16,10 +16,20 @@
 
 (defclass worker ()
   ((event-delay :initarg :event-delay :initform nil
-                :documentation "If defined, the timeout for the waititng queue to get an event. If timeout occured the timeout processing event would happen")
+                :documentation "If defined, the timeout for the waititng queue to get an event.
+If timeout occured the timeout processing event would happen")
    (name :initarg :name :initform "Worker thread")
-   (thread :initform nil :documentation "Worker thread")
-   (mailbox :documentation "Worker mailbox. The thread will wait until :stop event occures on this mailbox, using delay event-delay")))
+   (thread :initform nil
+           :documentation "Worker thread")
+   (mailbox :documentation
+            "Worker mailbox.
+The thread will wait until :stop event occures on this mailbox, using delay event-delay")
+   (stop-condition :initform (bt:make-condition-variable :name "worker-cond")
+                   :documentation "A condition used to determine if the thread has stopped")
+   (lock :initform (bt:make-recursive-lock "worker-lock")
+         :documentation "A lock for condition variable stop-condition"))
+  (:documentation "A worker class. It creates a thread and a mailbox waiting on the thread.
+Additionally provides a method 'send' to send messages to the mailbox."))
 
 ;;----------------------------------------------------------------------------
 ;; Protocol for Worker class
@@ -44,25 +54,24 @@ If event-delay slot is nil, the timer event will never be called"))
     (setf mailbox (mb-create "Worker thread mailbox")
           ;; Run the event loop in a thread
           thread (bt:make-thread
-                  ;;#'event-loop
                   (lambda ()
-                    (event-loop worker))
+                    (unwind-protect 
+                        (event-loop worker)
+                      (dbg "Exit thread function")))
                   :name name))))
 
 (defmethod stop ((worker worker))
   "Stops the worker thread"
-  (with-slots (thread) worker
+  (with-slots (thread lock stop-condition) worker
+    (when thread
+      (dbg "Client is running, trying to stop...")
+      (send worker :stop)
+      ;; Wait until stopped
+      (bt:with-lock-held (lock)
+        (bt:condition-wait stop-condition lock :timeout 10))
       (when thread
-        (dbg "Client is running, trying to stop...")
-        (send worker :stop)
-        ;; Wait until stopped
-        (when (= 1000
-                 (loop for counter below 1000
-                       while thread
-                       do (sleep 0.01)
-                       finally (return counter)))
-          (dbg "Error: unable to stop, forcing")
-          (bt:destroy-thread thread)))))
+        (dbg "Error: unable to stop, forcing")
+        (bt:destroy-thread thread)))))
 
 (defmethod send ((worker worker) message)
   "Send a message to a worker thread"
@@ -73,7 +82,7 @@ If event-delay slot is nil, the timer event will never be called"))
 
 (defmethod event-loop ((worker worker))
   "Worker thread event loop. Running in a worker thread context"
-  (with-slots (mailbox thread event-delay) worker
+  (with-slots (mailbox thread event-delay stop-condition) worker
     (unwind-protect
         (loop for evt = (mb-read mailbox event-delay)
               until (eq evt :stop)
@@ -81,11 +90,13 @@ If event-delay slot is nil, the timer event will never be called"))
               (process-event worker evt)
               else do
               (process-timer-event worker)
-              end
-              finally
-              (dbg "Stopped event loop~%")))
-    ;; cleanup after thread termination
-    (setf mailbox nil
-          thread nil)
-    (cleanup worker)))
+              end)
+      ;; cleanup after thread termination
+      (setf mailbox nil
+            thread nil)
+      (bt:condition-notify stop-condition)
+      (cleanup worker)
+      (dbg "Stopped event loop"))))
 
+(defmethod cleanup ((worker worker))
+  "Default cleanup method. Does nothing")
