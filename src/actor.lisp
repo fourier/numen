@@ -65,9 +65,9 @@ If event-delay slot is nil, the timer event will never be called"))
   (with-slots (thread lock stop-condition) actor
     (when thread
       (dbg "Client is running, trying to stop...")
-      (send actor :stop)
       ;; Wait until stopped
       (bt:with-lock-held (lock)
+        (send actor :stop)
         (bt:condition-wait stop-condition lock :timeout 10))
       (when thread
         (dbg "Error: unable to stop, forcing")
