@@ -23,6 +23,7 @@
   :components ((:module "src"
                 :components
                 ((:file "package")
+                 (:file "message")
                  (:file "mailbox")
                  (:file "logger")
                  (:file "actor")

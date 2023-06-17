@@ -2,7 +2,7 @@
 
 (defpackage #:numen.apiclient
   (:documentation "A connection to the Frostbite Client API")
-  (:use #:cl #:alexandria #:numen.logger #:numen.mailbox)
+  (:use #:cl #:alexandria #:numen.logger #:numen.mailbox #:numen.message)
   (:import-from #:numen.actor start stop send)
   (:export start stop send create-api-client))
 
@@ -14,13 +14,15 @@
 (defparameter *api-port* 10003
   "Port number for the Frostbite API server")
 
-(defparameter +event-delay+ 2.0
-  "Timeout for an event to be received")
+(defparameter +message-delay+ 2.0
+  "Timeout for an message to be received")
 
 (defparameter *socket* nil)
 
 (defclass api-client (numen.actor::actor)
-  ((port :initarg :port :initform *api-port*
+  ((supervisor :initarg :supervisor :initform nil
+               :documentation "Superviser to report connection status to")
+   (port :initarg :port :initform *api-port*
          :documentation "Frostbite API server port to connect to")
    (host :initarg :host :initform *api-server*
          :documentation "Frostbite API server hostname")
@@ -28,8 +30,9 @@
            :documentation "TCP client socket")))
    
 
-(defun create-api-client ()
-  (make-instance 'api-client :event-delay +event-delay+
+(defun create-api-client (&optional supervisor)
+  (make-instance 'api-client :message-delay +message-delay+
+                 :supervisor supervisor
                  :name "API Client"))
   
 (defmethod numen.actor:start :before ((self api-client))
@@ -38,13 +41,13 @@
 (defmethod numen.actor:start :after ((self api-client))
   (numen.actor:send self :start))
 
-(defmethod numen.actor:event-loop :after ((self api-client))
+(defmethod numen.actor:message-loop :after ((self api-client))
   (inf "Stopped ApiClient thread"))
 
-(defmethod numen.actor:process-event ((self api-client) evt)
+(defmethod numen.actor:process-message ((self api-client) evt)
   (case evt
     (:start (connect-client self))
-    (:wait (sleep +event-delay+))
+    (:wait (sleep +message-delay+))
     (otherwise (dbg "Received ~a~%" evt))))
 
 (defmethod connect-client ((self api-client))
@@ -58,7 +61,7 @@
       (error (e)
         (dbg "Unable to connect" e)))))
 
-(defmethod numen.actor:process-timer-event ((self api-client))
+(defmethod numen.actor:process-timer-message ((self api-client))
   (dbg "Checking the connection status...")
   (with-slots (socket) self
     (let ((should-reconnect (null socket)))
@@ -86,10 +89,10 @@
       (usocket:socket-close socket)
       (setf socket nil))))
 
-(defun notify-connected()
+(defmethod notify-connected ((self api-client))
   (inf "Connected"))
 
-(defun notify-disconnected()
+(defmethod notify-disconnected ((self api-client))
   (inf "Disconnected"))
 
 (defun read-until-slash-zero (&optional (stream *standard-input*))
